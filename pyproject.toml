@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "excursion-forecastability"
+version = "0.1.0"
+description = "Forecastability of rare excursions in systems telemetry."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "Sanjay Chari"}]
+dependencies = [
+  "neuralforecast==3.2.2",
+  "numpy>=1.26",
+  "pandas>=2.1",
+  "scipy>=1.11",
+  "torch>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.9",
+]
+
+[project.scripts]
+ptaf = "ptaf.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ptaf"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
