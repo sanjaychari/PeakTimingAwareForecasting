@@ -4,10 +4,28 @@ Code and experiment scripts for time-series forecasting experiments on TelecomTS
 
 The repository provides dataset preparation, Pearson correlation analysis, univariate and multivariate forecasting, and evaluation with MSE, Enhanced Peak (EP), and Modified Enhanced Peak (MEP) training objectives.
 
-## Install
+## Environment setup
+
+Python 3.11 is recommended. Create a local virtual environment from the repository root and install the package in editable mode:
 
 ```bash
-pip install -e '.[dev]'
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+```
+
+After activation, verify that the environment is being used:
+
+```bash
+which python
+python --version
+```
+
+On macOS/Linux, `which python` should point to `.venv/bin/python` inside this repository. Reactivate the environment in a new shell with:
+
+```bash
+source .venv/bin/activate
 ```
 
 ## Experiment configuration
@@ -58,7 +76,25 @@ EP and MEP grid-search candidates use `--tuning-max-steps` (`100` by default). A
 
 ## Prepare datasets
 
+The raw datasets are not stored in this repository. The commands below assume that raw data is placed under `../data/raw/` and processed files are written under `../data/processed/`.
+
 ### TelecomTS
+
+TelecomTS is publicly available from the Hugging Face dataset repository `AliMaatouk/TelecomTS`:
+
+```text
+https://huggingface.co/datasets/AliMaatouk/TelecomTS
+```
+
+One way to obtain the raw directory structure used by the preparation command is:
+
+```bash
+mkdir -p ../data/raw
+git clone https://huggingface.co/datasets/AliMaatouk/TelecomTS \
+  ../data/raw/telecomts
+```
+
+The dataset is approximately 1.3 GB. The preparation command reads the scenario-level telemetry files from this directory and produces the aligned CSV used by the experiments:
 
 ```bash
 ptaf prepare telecomts \
@@ -84,6 +120,39 @@ PRB_Utilization_UL
 
 ### MIT Supercloud
 
+The MIT Supercloud Dataset is publicly available through the Amazon Open Data Registry. The January 2022 release is stored at:
+
+```text
+s3://mit-supercloud-dataset/datacenter-challenge/202201/
+```
+
+Install the AWS CLI if it is not already available. The bucket supports anonymous reads, so an AWS account is not required. To inspect the available GPU data:
+
+```bash
+aws s3 ls \
+  s3://mit-supercloud-dataset/datacenter-challenge/202201/gpu/ \
+  --recursive --no-sign-request
+```
+
+The complete MIT Supercloud release is very large, so downloading the entire dataset is unnecessary for these experiments. Copy the GPU CSV files needed for the selected workload(s) into:
+
+```text
+../data/raw/mit_supercloud/gpu_labeled_sample/
+```
+
+For example, individual files can be downloaded with:
+
+```bash
+mkdir -p ../data/raw/mit_supercloud/gpu_labeled_sample
+
+aws s3 cp \
+  s3://mit-supercloud-dataset/datacenter-challenge/202201/gpu/<path-to-file.csv> \
+  ../data/raw/mit_supercloud/gpu_labeled_sample/ \
+  --no-sign-request
+```
+
+Then prepare the GPU traces:
+
 ```bash
 ptaf prepare mit-gpu \
   --root ../data/raw/mit_supercloud/gpu_labeled_sample \
@@ -99,6 +168,8 @@ mit_gpu::67691045781943-r7343737-n685852::utilization_gpu_pct
 The MIT workload is used only for univariate forecasting.
 
 ### ESNet
+
+The ESNet telemetry used by these experiments is not publicly distributed with this repository. Users with access to the source IF-MIB telemetry should place it in a local directory and pass that directory to `generate_esnet_delta_csv.py`.
 
 Convert the cumulative IF-MIB counters to five-minute deltas:
 
