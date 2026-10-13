@@ -1,39 +1,35 @@
 #!/usr/bin/env python3
 """
-Generate paper figures for the excursion-forecastability study.
+Generate final two-column paper figures for the systems excursion
+forecastability experiments.
 
-Expected repository layout:
-    PeakTimingAwareForecasting_forecastability/
-    ├── results/
-    ├── scripts/
-    └── ../data/processed/
-        ├── telecomts.csv
-        ├── mit_supercloud_gpu_utilization_gpu_pct.csv
-        └── esnet_r-nova-fd-01_delta.csv
+The script produces three large, vertically stacked multi-panel figures:
 
-The script recomputes Pearson predictive-structure values directly from the
-processed datasets using the first 70% of each selected series, then reads the
-forecasting metrics and forecasts from results/.
+  1. predictive_structure.pdf
+     Three full-width rows: TelecomTS, MIT Supercloud, ESNet.
+
+  2. event_f1_by_horizon.pdf
+     Three full-width rows: event macro-F1 versus forecast horizon.
+     MSE, EP, and MEP are shown separately. Each point is the mean across
+     the available model/configuration runs for that dataset/horizon/loss.
+     Detailed model- and mode-specific results remain in the CSV tables.
+
+  3. representative_forecasts.pdf
+     Three full-width rows: representative TelecomTS, MIT, and ESNet
+     forecast windows.
+
+The script also writes CSVs for LaTeX tables. No PNGs are produced.
 
 Usage:
     python scripts/plot_paper_results.py
-
-Optional:
-    python scripts/plot_paper_results.py \
-        --results results \
-        --data-root ../data/processed \
-        --output results/paper_figures
-
-Outputs both PDF (paper) and PNG (quick inspection).
 """
 
 from __future__ import annotations
 
 import argparse
-import math
-import re
 from pathlib import Path
 
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -67,9 +63,7 @@ DATASETS = {
     },
     "ESNet": {
         "file": "esnet_r-nova-fd-01_delta.csv",
-        "alternate_files": [
-            "esnet_r-nova-fd-01_delta_clean.csv",
-        ],
+        "alternate_files": ["esnet_r-nova-fd-01_delta_clean.csv"],
         "target_id": "esnet::r-nova-fd-01::ifHCOutOctets",
         "scenario": "r-nova-fd-01",
         "target_signal": "ifHCOutOctets",
@@ -90,6 +84,18 @@ DATASETS = {
 UNIVARIATE_MODELS = ["dlinear", "patchtst", "itransformer", "timemixer"]
 MULTIVARIATE_MODELS = ["tsmixer", "itransformer", "timemixer"]
 
+FINAL_PDFS = {
+    "predictive_structure.pdf",
+    "event_f1_by_horizon.pdf",
+    "representative_forecasts.pdf",
+}
+
+FINAL_CSVS = {
+    "predictive_structure.csv",
+    "forecast_metrics_by_run.csv",
+    "forecast_metrics_summary.csv",
+}
+
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -104,15 +110,40 @@ def parse_args():
         "--train-fraction",
         type=float,
         default=0.70,
-        help="Training prefix used for Pearson calculations.",
+        help="Training fraction used for Pearson calculations.",
     )
     return p.parse_args()
 
 
-def save_figure(fig, output_dir: Path, stem: str):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_dir / f"{stem}.pdf", bbox_inches="tight")
-    fig.savefig(output_dir / f"{stem}.png", dpi=300, bbox_inches="tight")
+def configure_matplotlib():
+    # These figures are intended for figure* in a two-column paper.
+    plt.rcParams.update(
+        {
+            "font.size": 11,
+            "axes.labelsize": 11,
+            "xtick.labelsize": 10,
+            "ytick.labelsize": 10,
+            "legend.fontsize": 10,
+            "lines.linewidth": 2.0,
+            "lines.markersize": 7,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
+    )
+
+
+def prepare_output_dir(output: Path):
+    output.mkdir(parents=True, exist_ok=True)
+
+    # Remove stale paper-figure assets produced by older versions of this
+    # script, but do not touch the experiment result directories.
+    for path in output.iterdir():
+        if path.is_file() and path.suffix.lower() in {".pdf", ".png", ".csv"}:
+            path.unlink()
+
+
+def save_pdf(fig, output: Path, filename: str):
+    fig.savefig(output / filename, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -131,30 +162,39 @@ def load_selected_wide(path: Path, spec: dict) -> pd.DataFrame:
     df = pd.read_csv(path)
     df["ds"] = pd.to_datetime(df["ds"])
 
-    # Prefer scenario+signal matching because the processed files store
-    # individual signals as separate rows.
-    selected = df[
-        (df["scenario"].astype(str) == spec["scenario"])
-        & (df["signal"].isin(spec["signals"]))
-    ].copy()
+    selected = pd.DataFrame()
+
+    if {"scenario", "signal"}.issubset(df.columns):
+        selected = df[
+            (df["scenario"].astype(str) == spec["scenario"])
+            & (df["signal"].isin(spec["signals"]))
+        ].copy()
+
+    if selected.empty and "unique_id" in df.columns:
+        selected = df[
+            df["unique_id"].astype(str) == spec["target_id"]
+        ].copy()
 
     if selected.empty:
-        # MIT is simplest and can always be recovered from unique_id.
-        selected = df[df["unique_id"] == spec["target_id"]].copy()
+        raise ValueError(
+            f"Could not locate selected series {spec['target_id']} in {path}"
+        )
 
     wide = (
-        selected.pivot_table(index="ds", columns="signal", values="y", aggfunc="first")
+        selected.pivot_table(
+            index="ds",
+            columns="signal",
+            values="y",
+            aggfunc="first",
+        )
         .sort_index()
     )
 
-    if spec["target_signal"] not in wide.columns:
-        raise ValueError(
-            f"{spec['target_signal']} not found in selected data from {path}"
-        )
+    target = spec["target_signal"]
+    if target not in wide.columns:
+        raise ValueError(f"{target} not found in selected rows from {path}")
 
-    # Require the target to exist. Auxiliary signals may have occasional gaps.
-    wide = wide[wide[spec["target_signal"]].notna()]
-    return wide
+    return wide[wide[target].notna()]
 
 
 def predictive_structure(data_root: Path, train_fraction: float) -> pd.DataFrame:
@@ -168,57 +208,37 @@ def predictive_structure(data_root: Path, train_fraction: float) -> pd.DataFrame
         train = wide.iloc[:n_train].copy()
         target = spec["target_signal"]
 
-        for h in HORIZONS:
-            if len(train) <= h:
-                raise ValueError(
-                    f"{dataset}: training series shorter than horizon {h}"
-                )
-
-            # corr(x_t, y_{t+h}); for x == y this is target autocorrelation.
-            future_y = train[target].shift(-h)
-
+        for horizon in HORIZONS:
+            future_y = train[target].shift(-horizon)
             target_r = train[target].corr(future_y)
 
-            covariate_rs = {}
+            aux_rs = {}
             for signal in spec["signals"]:
-                if signal not in train.columns:
+                if signal == target or signal not in train.columns:
                     continue
-                covariate_rs[signal] = train[signal].corr(future_y)
 
-            aux = {
-                k: v
-                for k, v in covariate_rs.items()
-                if k != target and pd.notna(v)
-            }
-            if aux:
-                best_signal = max(aux, key=lambda k: abs(aux[k]))
-                best_aux_r = aux[best_signal]
+                r = train[signal].corr(future_y)
+                if pd.notna(r):
+                    aux_rs[signal] = r
+
+            if aux_rs:
+                best_aux_signal = max(aux_rs, key=lambda s: abs(aux_rs[s]))
+                best_aux_r = aux_rs[best_aux_signal]
             else:
-                best_signal = None
+                best_aux_signal = None
                 best_aux_r = np.nan
 
             rows.append(
                 {
                     "dataset": dataset,
-                    "horizon": h,
+                    "horizon": horizon,
                     "target_r": target_r,
-                    "best_aux_signal": best_signal,
+                    "best_aux_signal": best_aux_signal,
                     "best_aux_r": best_aux_r,
                 }
             )
 
     return pd.DataFrame(rows)
-
-
-def read_metric(run_dir: Path, metric: str) -> float:
-    path = run_dir / "metrics.csv"
-    if not path.exists():
-        return np.nan
-    df = pd.read_csv(path)
-    row = df[df["metric"] == metric]
-    if row.empty:
-        return np.nan
-    return float(row.iloc[0]["mean"])
 
 
 def run_dir(
@@ -235,211 +255,261 @@ def run_dir(
     )
 
 
+def read_metric_record(
+    run: Path,
+    metric: str,
+    multivariate: bool = False,
+) -> dict:
+    path = run / (
+        "metrics_focus_signal.csv" if multivariate else "metrics.csv"
+    )
+
+    empty = {
+        "mean": np.nan,
+        "median": np.nan,
+        "std": np.nan,
+        "n_valid": np.nan,
+    }
+
+    if not path.exists():
+        return empty
+
+    df = pd.read_csv(path)
+    row = df[df["metric"] == metric]
+
+    if row.empty:
+        return empty
+
+    row = row.iloc[0]
+
+    return {
+        "mean": float(row["mean"]) if pd.notna(row.get("mean")) else np.nan,
+        "median": float(row["median"]) if pd.notna(row.get("median")) else np.nan,
+        "std": float(row["std"]) if pd.notna(row.get("std")) else np.nan,
+        "n_valid": (
+            int(row["n_valid"])
+            if "n_valid" in row and pd.notna(row["n_valid"])
+            else np.nan
+        ),
+    }
+
+
 def collect_metrics(results: Path) -> pd.DataFrame:
+    metric_names = [
+        "event_macro_f1",
+        "peak_f1",
+        "trough_f1",
+        "mse",
+        "mae",
+        "event_timing_mae_steps",
+        "event_magnitude_mae",
+    ]
+
     rows = []
 
     for dataset, spec in DATASETS.items():
-        for multivariate, models in [
+        settings = [
             (False, UNIVARIATE_MODELS),
             (True, MULTIVARIATE_MODELS),
-        ]:
-            # MIT has no multivariate experiment.
+        ]
+
+        for multivariate, models in settings:
             if dataset == "MIT Supercloud" and multivariate:
                 continue
 
             for model in models:
-                for h in HORIZONS:
+                for horizon in HORIZONS:
                     for loss in LOSSES:
-                        d = run_dir(
+                        run = run_dir(
                             results,
                             spec["result_stem"],
                             model,
                             loss,
-                            h,
+                            horizon,
                             multivariate,
                         )
-                        if not d.exists():
+
+                        if not run.exists():
                             continue
 
-                        rows.append(
-                            {
-                                "dataset": dataset,
-                                "mode": "multivariate" if multivariate else "univariate",
-                                "model": model,
-                                "loss": loss,
-                                "horizon": h,
-                                "event_macro_f1": read_metric(d, "event_macro_f1"),
-                                "peak_f1": read_metric(d, "peak_f1"),
-                                "trough_f1": read_metric(d, "trough_f1"),
-                                "mse": read_metric(d, "mse"),
-                                "mae": read_metric(d, "mae"),
-                            }
-                        )
+                        row = {
+                            "dataset": dataset,
+                            "mode": (
+                                "multivariate"
+                                if multivariate
+                                else "univariate"
+                            ),
+                            "model": model,
+                            "loss": loss,
+                            "horizon": horizon,
+                        }
+
+                        for metric in metric_names:
+                            stats = read_metric_record(
+                                run,
+                                metric,
+                                multivariate=multivariate,
+                            )
+                            for stat, value in stats.items():
+                                row[f"{metric}_{stat}"] = value
+
+                        rows.append(row)
 
     return pd.DataFrame(rows)
 
 
-def plot_correlation_by_horizon(corr: pd.DataFrame, output: Path):
-    fig, ax = plt.subplots(figsize=(6.4, 4.0))
+def panel_title(ax, label: str, title: str):
+    ax.text(
+        0.0,
+        1.03,
+        f"({label}) {title}",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontweight="bold",
+        fontsize=12,
+    )
 
-    for dataset in DATASETS:
+
+def plot_predictive_structure(corr: pd.DataFrame, output: Path):
+    """
+    One dataset per full-width row.
+    """
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(7.3, 8.2),
+        sharex=True,
+    )
+
+    panels = [
+        ("a", "TelecomTS"),
+        ("b", "MIT Supercloud"),
+        ("c", "ESNet"),
+    ]
+
+    for ax, (label, dataset) in zip(axes, panels):
         d = corr[corr["dataset"] == dataset].sort_values("horizon")
+
         ax.plot(
             d["horizon"],
             d["target_r"],
             marker="o",
-            linewidth=1.8,
-            label=dataset,
-        )
-
-    ax.axhline(0.0, linewidth=0.8)
-    ax.set_xlabel("Forecast horizon (steps)")
-    ax.set_ylabel(r"Pearson $r(y_t, y_{t+h})$")
-    ax.set_xticks(HORIZONS)
-    ax.legend(frameon=False)
-    fig.tight_layout()
-    save_figure(fig, output, "correlation_by_horizon")
-
-
-def plot_target_and_best_covariate(corr: pd.DataFrame, output: Path):
-    # Useful for TelecomTS and ESNet; MIT has no companion telemetry.
-    for dataset in ["TelecomTS", "ESNet"]:
-        d = corr[corr["dataset"] == dataset].sort_values("horizon")
-
-        fig, ax = plt.subplots(figsize=(6.4, 4.0))
-        ax.plot(
-            d["horizon"],
-            d["target_r"],
-            marker="o",
-            linewidth=1.8,
             label="Target history",
         )
-        ax.plot(
-            d["horizon"],
-            d["best_aux_r"].abs(),
-            marker="s",
-            linewidth=1.8,
-            label="Strongest covariate (absolute r)",
-        )
 
-        ax.set_xlabel("Forecast horizon (steps)")
+        if dataset != "MIT Supercloud":
+            ax.plot(
+                d["horizon"],
+                d["best_aux_r"].abs(),
+                marker="s",
+                label="Strongest covariate",
+            )
+
+        ax.axhline(0.0, linewidth=0.8)
         ax.set_ylabel("Pearson correlation")
         ax.set_xticks(HORIZONS)
-        ax.legend(frameon=False)
-        fig.tight_layout()
-        save_figure(
-            fig,
-            output,
-            f"{dataset.lower().replace(' ', '_')}_predictive_structure",
-        )
+        panel_title(ax, label, dataset)
+        ax.grid(axis="y", alpha=0.25)
+
+    axes[-1].set_xlabel("Forecast horizon (steps)")
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.995),
+        ncol=2,
+        frameon=False,
+    )
+
+    fig.subplots_adjust(
+        left=0.12,
+        right=0.98,
+        bottom=0.08,
+        top=0.93,
+        hspace=0.42,
+    )
+
+    save_pdf(fig, output, "predictive_structure.pdf")
 
 
 def plot_event_f1_by_horizon(metrics: pd.DataFrame, output: Path):
     """
-    One figure per dataset/mode. Each line is a loss and each point is the
-    mean event macro-F1 across the models available in that mode.
+    Broad loss-level view.
 
-    The full per-model results should still be reported in a table; this plot
-    is for the broad trend.
+    Each point is the mean of the run-level mean event macro-F1 values for
+    all available model/configuration runs at that dataset/horizon/loss.
+
+    The detailed model, mode, and test-window results are kept in CSVs and
+    should be presented in LaTeX tables.
     """
-    for (dataset, mode), d in metrics.groupby(["dataset", "mode"]):
-        fig, ax = plt.subplots(figsize=(6.4, 4.0))
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(7.3, 8.2),
+        sharex=True,
+    )
+
+    panels = [
+        ("a", "TelecomTS"),
+        ("b", "MIT Supercloud"),
+        ("c", "ESNet"),
+    ]
+
+    for ax, (label, dataset) in zip(axes, panels):
+        dset = metrics[metrics["dataset"] == dataset]
 
         for loss in LOSSES:
-            x = (
-                d[d["loss"] == loss]
-                .groupby("horizon", as_index=False)["event_macro_f1"]
-                .mean()
+            dloss = dset[dset["loss"] == loss]
+
+            summary = (
+                dloss.groupby("horizon", as_index=False)
+                .agg(
+                    mean_f1=("event_macro_f1_mean", "mean"),
+                    n_runs=("event_macro_f1_mean", "count"),
+                )
                 .sort_values("horizon")
             )
-            if x.empty:
+
+            if summary.empty:
                 continue
+
             ax.plot(
-                x["horizon"],
-                x["event_macro_f1"],
+                summary["horizon"],
+                summary["mean_f1"],
                 marker="o",
-                linewidth=1.8,
                 label=loss.upper(),
             )
 
-        ax.set_xlabel("Forecast horizon (steps)")
         ax.set_ylabel("Mean event macro-F1")
+        ax.set_ylim(bottom=0)
         ax.set_xticks(HORIZONS)
-        ax.set_ylim(bottom=0)
-        ax.legend(frameon=False)
-        fig.tight_layout()
+        panel_title(ax, label, dataset)
+        ax.grid(axis="y", alpha=0.25)
 
-        stem = (
-            f"{dataset.lower().replace(' ', '_')}_"
-            f"{mode}_event_f1_by_horizon"
-        )
-        save_figure(fig, output, stem)
+    axes[-1].set_xlabel("Forecast horizon (steps)")
 
-
-def plot_correlation_vs_event_f1(
-    corr: pd.DataFrame,
-    metrics: pd.DataFrame,
-    output: Path,
-):
-    """
-    Directly ties predictive structure to excursion forecasting performance.
-    Each point is one model/loss/horizon experiment. The x value is the target
-    Pearson correlation for that dataset/horizon.
-    """
-    merged = metrics.merge(
-        corr[["dataset", "horizon", "target_r"]],
-        on=["dataset", "horizon"],
-        how="inner",
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.995),
+        ncol=3,
+        frameon=False,
     )
-    merged = merged[
-        merged["event_macro_f1"].notna() & merged["target_r"].notna()
-    ].copy()
 
-    # Separate figure per loss keeps the figure readable and avoids turning
-    # architecture/loss/dataset into an unreadable marker legend.
-    for loss in LOSSES:
-        fig, ax = plt.subplots(figsize=(6.4, 4.4))
-        dloss = merged[merged["loss"] == loss]
+    fig.subplots_adjust(
+        left=0.12,
+        right=0.98,
+        bottom=0.08,
+        top=0.93,
+        hspace=0.42,
+    )
 
-        for dataset in DATASETS:
-            d = dloss[dloss["dataset"] == dataset]
-            if d.empty:
-                continue
-            ax.scatter(
-                d["target_r"],
-                d["event_macro_f1"],
-                s=38,
-                alpha=0.75,
-                label=dataset,
-            )
-
-        # Add a simple least-squares trend only if enough finite points exist.
-        finite = dloss[
-            np.isfinite(dloss["target_r"])
-            & np.isfinite(dloss["event_macro_f1"])
-        ]
-        if len(finite) >= 3 and finite["target_r"].nunique() > 1:
-            x = finite["target_r"].to_numpy()
-            y = finite["event_macro_f1"].to_numpy()
-            m, b = np.polyfit(x, y, 1)
-            xs = np.linspace(x.min(), x.max(), 100)
-            ax.plot(xs, m * xs + b, linewidth=1.2)
-
-            r = np.corrcoef(x, y)[0, 1]
-            ax.text(
-                0.03,
-                0.95,
-                f"Across runs: r = {r:.2f}",
-                transform=ax.transAxes,
-                va="top",
-            )
-
-        ax.set_xlabel(r"Target Pearson $r(y_t, y_{t+h})$")
-        ax.set_ylabel("Event macro-F1")
-        ax.set_ylim(bottom=0)
-        ax.legend(frameon=False)
-        fig.tight_layout()
-        save_figure(fig, output, f"correlation_vs_event_f1_{loss}")
+    save_pdf(fig, output, "event_f1_by_horizon.pdf")
 
 
 def read_forecast_set(
@@ -449,10 +519,11 @@ def read_forecast_set(
     horizon: int,
     window: int,
     multivariate: bool = False,
-):
+) -> dict[str, pd.DataFrame]:
     frames = {}
+
     for loss in LOSSES:
-        d = run_dir(
+        run = run_dir(
             results,
             dataset_stem,
             model,
@@ -460,165 +531,240 @@ def read_forecast_set(
             horizon,
             multivariate,
         )
-        path = d / "forecast.csv"
+
+        path = run / "forecast.csv"
+
         if not path.exists():
             raise FileNotFoundError(path)
 
-        f = pd.read_csv(path)
-        f["ds"] = pd.to_datetime(f["ds"])
-        f = f[f["window"] == window].copy()
-        if f.empty:
-            raise ValueError(
-                f"No window {window} in {path}"
-            )
-        frames[loss] = f
+        frame = pd.read_csv(path)
+        frame["ds"] = pd.to_datetime(frame["ds"])
+        frame = frame[frame["window"] == window].copy()
+
+        if frame.empty:
+            raise ValueError(f"No window {window} in {path}")
+
+        frames[loss] = frame
 
     return frames
 
 
-def plot_forecast_example(
-    results: Path,
-    output: Path,
-    dataset: str,
-    model: str,
-    horizon: int,
-    window: int,
-    ylabel: str,
-    stem: str,
-):
-    spec = DATASETS[dataset]
-    frames = read_forecast_set(
-        results,
-        spec["result_stem"],
-        model,
-        horizon,
-        window,
+def format_time_axis(ax):
+    locator = mdates.AutoDateLocator(minticks=4, maxticks=7)
+    formatter = mdates.DateFormatter("%H:%M")
+
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
+
+
+def plot_representative_forecasts(results: Path, output: Path):
+    """
+    One representative forecast per full-width row.
+    """
+    examples = [
+        {
+            "panel": "a",
+            "dataset": "TelecomTS",
+            "model": "dlinear",
+            "horizon": 336,
+            "window": 1,
+            "ylabel": "TX_Bytes",
+            "title": "TelecomTS — DLinear, h=336",
+        },
+        {
+            "panel": "b",
+            "dataset": "MIT Supercloud",
+            "model": "timemixer",
+            "horizon": 720,
+            "window": 0,
+            "ylabel": "GPU utilization (%)",
+            "title": "MIT Supercloud — TimeMixer, h=720",
+        },
+        {
+            "panel": "c",
+            "dataset": "ESNet",
+            "model": "timemixer",
+            "horizon": 96,
+            "window": 36,
+            "ylabel": "ifHCOutOctets delta",
+            "title": "ESNet — TimeMixer, h=96",
+        },
+    ]
+
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(7.3, 8.8),
     )
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    legend_handles = None
+    legend_labels = None
 
-    actual = frames["mse"]
-    ax.plot(
-        actual["ds"],
-        actual["y"],
-        linewidth=2.0,
-        label="Actual",
-    )
+    for ax, example in zip(axes, examples):
+        spec = DATASETS[example["dataset"]]
 
-    for loss in LOSSES:
-        f = frames[loss]
-        ax.plot(
-            f["ds"],
-            f["y_hat"],
-            linewidth=1.35,
-            label=loss.upper(),
+        frames = read_forecast_set(
+            results,
+            spec["result_stem"],
+            example["model"],
+            example["horizon"],
+            example["window"],
         )
 
-    ax.set_xlabel("Time")
-    ax.set_ylabel(ylabel)
-    ax.legend(frameon=False, ncol=4)
-    fig.autofmt_xdate()
-    fig.tight_layout()
-    save_figure(fig, output, stem)
+        actual = frames["mse"]
+
+        ax.plot(
+            actual["ds"],
+            actual["y"],
+            linewidth=2.4,
+            label="Actual",
+        )
+
+        for loss in LOSSES:
+            frame = frames[loss]
+
+            ax.plot(
+                frame["ds"],
+                frame["y_hat"],
+                linewidth=1.7,
+                label=loss.upper(),
+            )
+
+        panel_title(
+            ax,
+            example["panel"],
+            example["title"],
+        )
+        format_time_axis(ax)
+        ax.grid(axis="y", alpha=0.20)
+
+        if example["dataset"] == "TelecomTS":
+            ax.yaxis.set_major_formatter(
+                plt.FuncFormatter(lambda value, _: f"{value / 1e5:g}")
+            )
+            ax.set_ylabel(r"TX_Bytes ($\times 10^5$)")
+        elif example["dataset"] == "ESNet":
+            ax.yaxis.set_major_formatter(
+                plt.FuncFormatter(lambda value, _: f"{value / 1e11:g}")
+            )
+            ax.set_ylabel(r"ifHCOutOctets delta ($\times 10^{11}$)")
+        else:
+            ax.set_ylabel(example["ylabel"])
+
+        if legend_handles is None:
+            legend_handles, legend_labels = ax.get_legend_handles_labels()
+
+    axes[-1].set_xlabel("Time")
+
+    fig.legend(
+        legend_handles,
+        legend_labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.995),
+        ncol=4,
+        frameon=False,
+    )
+
+    fig.subplots_adjust(
+        left=0.14,
+        right=0.98,
+        bottom=0.08,
+        top=0.93,
+        hspace=0.48,
+    )
+
+    save_pdf(fig, output, "representative_forecasts.pdf")
 
 
-def write_summary_tables(
+def write_table_data(
     corr: pd.DataFrame,
     metrics: pd.DataFrame,
     output: Path,
 ):
-    output.mkdir(parents=True, exist_ok=True)
+    corr.to_csv(
+        output / "predictive_structure.csv",
+        index=False,
+    )
 
-    corr.to_csv(output / "predictive_structure.csv", index=False)
-    metrics.to_csv(output / "forecast_metrics_selected_runs.csv", index=False)
+    metrics.to_csv(
+        output / "forecast_metrics_by_run.csv",
+        index=False,
+    )
 
-    # Loss-level summary by dataset/horizon/mode.
     summary = (
         metrics.groupby(
             ["dataset", "mode", "horizon", "loss"],
             as_index=False,
         )
         .agg(
-            mean_event_macro_f1=("event_macro_f1", "mean"),
-            mean_peak_f1=("peak_f1", "mean"),
-            mean_trough_f1=("trough_f1", "mean"),
-            mean_mse=("mse", "mean"),
-            n_models=("model", "nunique"),
+            model_count=("model", "nunique"),
+            event_macro_f1_model_mean=("event_macro_f1_mean", "mean"),
+            event_macro_f1_model_std=("event_macro_f1_mean", "std"),
+            peak_f1_model_mean=("peak_f1_mean", "mean"),
+            trough_f1_model_mean=("trough_f1_mean", "mean"),
+            mse_model_mean=("mse_mean", "mean"),
+            mae_model_mean=("mae_mean", "mean"),
         )
     )
-    summary.to_csv(output / "forecast_metrics_summary.csv", index=False)
+
+    summary.to_csv(
+        output / "forecast_metrics_summary.csv",
+        index=False,
+    )
 
 
 def main():
     args = parse_args()
-    args.results = args.results.resolve()
-    args.data_root = args.data_root.resolve()
-    args.output = args.output.resolve()
 
-    print(f"Results: {args.results}")
-    print(f"Data:    {args.data_root}")
-    print(f"Output:  {args.output}")
+    results = args.results.resolve()
+    data_root = args.data_root.resolve()
+    output = args.output.resolve()
 
-    corr = predictive_structure(args.data_root, args.train_fraction)
-    metrics = collect_metrics(args.results)
+    configure_matplotlib()
+    prepare_output_dir(output)
+
+    print(f"Results: {results}")
+    print(f"Data:    {data_root}")
+    print(f"Output:  {output}")
+
+    corr = predictive_structure(
+        data_root,
+        args.train_fraction,
+    )
+
+    metrics = collect_metrics(results)
 
     if metrics.empty:
         raise RuntimeError(
-            "No matching MSE/EP/MEP result directories were found."
+            "No matching MSE/EP/MEP paper runs were found under results/."
         )
 
-    write_summary_tables(corr, metrics, args.output)
-
-    # Main quantitative plots.
-    plot_correlation_by_horizon(corr, args.output)
-    plot_target_and_best_covariate(corr, args.output)
-    plot_event_f1_by_horizon(metrics, args.output)
-    plot_correlation_vs_event_f1(corr, metrics, args.output)
-
-    # Representative qualitative cases selected from the current results.
-    #
-    # 1. TelecomTS: MEP recovers some excursions at h=336 but also produces
-    #    considerably more excursion activity than MSE/EP.
-    plot_forecast_example(
-        args.results,
-        args.output,
-        dataset="TelecomTS",
-        model="dlinear",
-        horizon=336,
-        window=1,
-        ylabel="TX_Bytes",
-        stem="telecomts_dlinear_h336_window1",
+    write_table_data(
+        corr,
+        metrics,
+        output,
     )
 
-    # 2. MIT: all objectives stay near the dominant high-utilization regime
-    #    while the actual series contains an abrupt utilization trough.
-    plot_forecast_example(
-        args.results,
-        args.output,
-        dataset="MIT Supercloud",
-        model="timemixer",
-        horizon=720,
-        window=0,
-        ylabel="GPU utilization (%)",
-        stem="mit_timemixer_h720_window0",
+    plot_predictive_structure(
+        corr,
+        output,
     )
 
-    # 3. ESNet: useful qualitative MEP case. Window 36 contains the trough
-    #    whose timing MEP places correctly while MSE/EP are later.
-    plot_forecast_example(
-        args.results,
-        args.output,
-        dataset="ESNet",
-        model="timemixer",
-        horizon=96,
-        window=36,
-        ylabel="ifHCOutOctets delta",
-        stem="esnet_timemixer_h96_window36",
+    plot_event_f1_by_horizon(
+        metrics,
+        output,
     )
 
-    print("\nGenerated:")
-    for p in sorted(args.output.iterdir()):
-        print(f"  {p}")
+    plot_representative_forecasts(
+        results,
+        output,
+    )
+
+    print("\nGenerated paper assets:")
+    for filename in sorted(FINAL_PDFS | FINAL_CSVS):
+        path = output / filename
+        if path.exists():
+            print(f"  {path}")
 
 
 if __name__ == "__main__":
