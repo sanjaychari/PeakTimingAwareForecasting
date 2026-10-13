@@ -378,7 +378,7 @@ def plot_predictive_structure(corr: pd.DataFrame, output: Path):
     fig, axes = plt.subplots(
         3,
         1,
-        figsize=(7.3, 8.2),
+        figsize=(7.3, 5.0),
         sharex=True,
     )
 
@@ -407,11 +407,11 @@ def plot_predictive_structure(corr: pd.DataFrame, output: Path):
             )
 
         ax.axhline(0.0, linewidth=0.8)
-        ax.set_ylabel("Pearson correlation")
         ax.set_xticks(HORIZONS)
         panel_title(ax, label, dataset)
         ax.grid(axis="y", alpha=0.25)
 
+    fig.supylabel("Pearson correlation", x=0.025, fontsize=10)
     axes[-1].set_xlabel("Forecast horizon (steps)")
 
     handles, labels = axes[0].get_legend_handles_labels()
@@ -427,9 +427,9 @@ def plot_predictive_structure(corr: pd.DataFrame, output: Path):
     fig.subplots_adjust(
         left=0.12,
         right=0.98,
-        bottom=0.08,
-        top=0.93,
-        hspace=0.42,
+        bottom=0.10,
+        top=0.91,
+        hspace=0.62,
     )
 
     save_pdf(fig, output, "predictive_structure.pdf")
@@ -448,7 +448,7 @@ def plot_event_f1_by_horizon(metrics: pd.DataFrame, output: Path):
     fig, axes = plt.subplots(
         3,
         1,
-        figsize=(7.3, 8.2),
+        figsize=(7.3, 5.0),
         sharex=True,
     )
 
@@ -483,12 +483,12 @@ def plot_event_f1_by_horizon(metrics: pd.DataFrame, output: Path):
                 label=loss.upper(),
             )
 
-        ax.set_ylabel("Mean event macro-F1")
         ax.set_ylim(bottom=0)
         ax.set_xticks(HORIZONS)
         panel_title(ax, label, dataset)
         ax.grid(axis="y", alpha=0.25)
 
+    fig.supylabel("Mean event macro-F1", x=0.025, fontsize=10)
     axes[-1].set_xlabel("Forecast horizon (steps)")
 
     handles, labels = axes[0].get_legend_handles_labels()
@@ -504,9 +504,9 @@ def plot_event_f1_by_horizon(metrics: pd.DataFrame, output: Path):
     fig.subplots_adjust(
         left=0.12,
         right=0.98,
-        bottom=0.08,
-        top=0.93,
-        hspace=0.42,
+        bottom=0.10,
+        top=0.91,
+        hspace=0.62,
     )
 
     save_pdf(fig, output, "event_f1_by_horizon.pdf")
@@ -594,7 +594,7 @@ def plot_representative_forecasts(results: Path, output: Path):
     fig, axes = plt.subplots(
         3,
         1,
-        figsize=(7.3, 8.8),
+        figsize=(7.3, 5.4),
     )
 
     legend_handles = None
@@ -642,14 +642,22 @@ def plot_representative_forecasts(results: Path, output: Path):
             ax.yaxis.set_major_formatter(
                 plt.FuncFormatter(lambda value, _: f"{value / 1e5:g}")
             )
-            ax.set_ylabel(r"TX_Bytes ($\times 10^5$)")
+            ax.set_ylabel(
+                "TX_Bytes\n" + r"($\times 10^5$)",
+                fontsize=9,
+                labelpad=8,
+            )
         elif example["dataset"] == "ESNet":
             ax.yaxis.set_major_formatter(
                 plt.FuncFormatter(lambda value, _: f"{value / 1e11:g}")
             )
-            ax.set_ylabel(r"ifHCOutOctets delta ($\times 10^{11}$)")
+            ax.set_ylabel(
+                "ifHCOutOctets delta\n" + r"($\times 10^{11}$)",
+                fontsize=9,
+                labelpad=8,
+            )
         else:
-            ax.set_ylabel(example["ylabel"])
+            ax.set_ylabel(example["ylabel"], fontsize=9, labelpad=8)
 
         if legend_handles is None:
             legend_handles, legend_labels = ax.get_legend_handles_labels()
@@ -666,11 +674,11 @@ def plot_representative_forecasts(results: Path, output: Path):
     )
 
     fig.subplots_adjust(
-        left=0.14,
+        left=0.17,
         right=0.98,
-        bottom=0.08,
-        top=0.93,
-        hspace=0.48,
+        bottom=0.10,
+        top=0.91,
+        hspace=0.68,
     )
 
     save_pdf(fig, output, "representative_forecasts.pdf")
