@@ -15,6 +15,8 @@ from .datasets import (
 )
 from .experiment import ExperimentConfig, run_experiment
 from .correlation import write_correlation_analysis
+from .precursors import write_event_precursor_analysis
+from .robustness import write_results_sensitivity
 from .models import SUPPORTED_MODELS
 from .paths import data_root
 
@@ -71,6 +73,34 @@ def _build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--train-fraction", type=float, default=.7)
     analyze.add_argument("--output", type=Path, required=True)
     analyze.set_defaults(handler=_cmd_correlate)
+
+    precursor = sub.add_parser(
+        "event-precursors",
+        help="measure event-specific precursor structure using only the training prefix",
+    )
+    precursor.add_argument("--data", type=Path, required=True)
+    precursor.add_argument("--series-id", required=True)
+    precursor.add_argument("--horizons", nargs="+", type=int, default=[96,192,336,720])
+    precursor.add_argument("--signals", nargs="+", default=None)
+    precursor.add_argument("--input-size", type=int, default=336)
+    precursor.add_argument("--train-fraction", type=float, default=.7)
+    precursor.add_argument("--analysis-val-fraction", type=float, default=.3)
+    precursor.add_argument("--prominence-fraction", type=float, default=.10)
+    precursor.add_argument("--prominence-window", type=int, default=31)
+    precursor.add_argument("--event-distance", type=int, default=3)
+    precursor.add_argument("--event-tolerance", type=int, default=3)
+    precursor.add_argument("--output", type=Path, required=True)
+    precursor.set_defaults(handler=_cmd_event_precursors)
+
+    sensitivity = sub.add_parser(
+        "event-sensitivity",
+        help="re-evaluate completed forecasts across event-definition settings",
+    )
+    sensitivity.add_argument("--results-root", type=Path, required=True)
+    sensitivity.add_argument("--prominence-fractions", nargs="+", type=float, default=[.05,.10,.20])
+    sensitivity.add_argument("--event-tolerances", nargs="+", type=int, default=[1,3,5])
+    sensitivity.add_argument("--output", type=Path, required=True)
+    sensitivity.set_defaults(handler=_cmd_event_sensitivity)
 
     run = sub.add_parser("run")
     run.add_argument("--data", type=Path, required=True)
@@ -145,6 +175,37 @@ def _cmd_correlate(args):
     out=write_correlation_analysis(
         frame, args.series_id, tuple(args.horizons), args.output,
         signals=tuple(args.signals or ()), train_fraction=args.train_fraction,
+    )
+    print(out)
+    return 0
+
+
+def _cmd_event_precursors(args):
+    frame = load_prepared(args.data)
+    out = write_event_precursor_analysis(
+        frame,
+        args.series_id,
+        tuple(args.horizons),
+        args.output,
+        signals=tuple(args.signals or ()),
+        input_size=args.input_size,
+        train_fraction=args.train_fraction,
+        analysis_val_fraction=args.analysis_val_fraction,
+        prominence_fraction=args.prominence_fraction,
+        prominence_window=args.prominence_window,
+        event_distance=args.event_distance,
+        event_tolerance=args.event_tolerance,
+    )
+    print(out)
+    return 0
+
+
+def _cmd_event_sensitivity(args):
+    out = write_results_sensitivity(
+        args.results_root,
+        args.output,
+        prominence_fractions=tuple(args.prominence_fractions),
+        event_tolerances=tuple(args.event_tolerances),
     )
     print(out)
     return 0

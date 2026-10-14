@@ -2,7 +2,7 @@
 
 Code and experiment scripts for time-series forecasting experiments on TelecomTS, MIT Supercloud GPU telemetry, and ESNet.
 
-The repository provides dataset preparation, Pearson correlation analysis, univariate and multivariate forecasting, and evaluation with MSE, Enhanced Peak (EP), and Modified Enhanced Peak (MEP) training objectives.
+The repository provides dataset preparation, whole-signal Pearson correlation analysis, event-specific precursor analysis, univariate and multivariate forecasting, and evaluation with MSE, Enhanced Peak (EP), and Modified Enhanced Peak (MEP) training objectives. It also includes a sensitivity analysis for the event prominence threshold and temporal matching tolerance.
 
 ## Environment setup
 
@@ -36,8 +36,11 @@ source .venv/bin/activate
 - Multivariate models: TSMixer, iTransformer, TimeMixer
 - Training objectives: MSE, EP, MEP
 - Event evaluation: prominence-qualified peaks and troughs
+- Primary event prominence fraction: `0.10` of the training `Q99 - Q01` range
+- Primary event matching tolerance: `±3` time steps
 - Train/validation/test split: chronological
 - Correlation calculations: training portion only
+- Event-specific precursor analysis: training portion only
 
 The third positional argument passed to `run_horizon_sweep.sh` is the maximum number of optimizer updates used for the final model fit. The examples below use `1000`. This value is a training-step budget, not a number of epochs.
 
@@ -252,6 +255,84 @@ for each auxiliary input signal. The offsets are `96`, `192`, `336`, and `720`. 
   'ifHCOutOctets,ifHCOutUcastPkts,ifHCOutMulticastPkts,ifHCOutBroadcastPkts,ifHCInOctets,ifHCInUcastPkts,ifHCInMulticastPkts,ifHCInBroadcastPkts'
 ```
 
+
+## Event-specific precursor analysis
+
+The Pearson correlation analysis above measures dependence over the complete signal. The event-specific precursor analysis instead asks whether the history immediately available to a forecasting model contains structure that distinguishes future excursion windows from ordinary windows.
+
+The analysis uses only the same 70% training prefix used by the forecasting experiments; it does not use the forecasting validation or test splits. For each horizon, a 336-step history ending at time `t` is labeled positive when a prominence-qualified event occurs within `±3` steps of `t + h`.
+
+For each history window, the analysis extracts deterministic summary features (`last`, `mean`, `std`, `min`, `max`, `delta`, and `slope`) for the available signals. It reports:
+
+- the strongest absolute point-biserial correlation between a precursor feature and the future-event label;
+- the signal and summary statistic producing that correlation;
+- ROC AUC and balanced accuracy from a lightweight nearest-centroid classifier.
+
+The classifier is used only as a diagnostic of whether event-specific precursor structure generalizes within the training prefix. It is not treated as a competing forecasting model.
+
+### TelecomTS univariate
+
+```bash
+./scripts/run_event_precursor_analysis.sh \
+  ../data/processed/telecomts.csv \
+  'telecomts::normal/stationary/Zone_B/no_congestion/File::TX_Bytes' \
+  results/telecomts_event_precursors_univariate.csv
+```
+
+### TelecomTS multivariate
+
+```bash
+./scripts/run_event_precursor_analysis.sh \
+  ../data/processed/telecomts.csv \
+  'telecomts::normal/stationary/Zone_B/no_congestion/File::TX_Bytes' \
+  results/telecomts_event_precursors_multivariate.csv \
+  'TX_Bytes,RX_Bytes,Estimated_UL_Buffer,PRB_Utilization_DL,PRB_Utilization_UL'
+```
+
+### MIT Supercloud
+
+```bash
+./scripts/run_event_precursor_analysis.sh \
+  ../data/processed/mit_supercloud_gpu_utilization_gpu_pct.csv \
+  'mit_gpu::67691045781943-r7343737-n685852::utilization_gpu_pct' \
+  results/mit_event_precursors_univariate.csv
+```
+
+### ESNet univariate
+
+```bash
+./scripts/run_event_precursor_analysis.sh \
+  ../data/processed/esnet_r-nova-fd-01_delta.csv \
+  'esnet::r-nova-fd-01::ifHCOutOctets' \
+  results/esnet_event_precursors_univariate.csv
+```
+
+### ESNet multivariate
+
+```bash
+./scripts/run_event_precursor_analysis.sh \
+  ../data/processed/esnet_r-nova-fd-01_delta.csv \
+  'esnet::r-nova-fd-01::ifHCOutOctets' \
+  results/esnet_event_precursors_multivariate.csv \
+  'ifHCOutOctets,ifHCOutUcastPkts,ifHCOutMulticastPkts,ifHCOutBroadcastPkts,ifHCInOctets,ifHCInUcastPkts,ifHCInMulticastPkts,ifHCInBroadcastPkts'
+```
+
+The output contains separate rows for `any`, `peak`, and `trough` events at horizons `96`, `192`, `336`, and `720`. The main diagnostic columns are:
+
+```text
+horizon
+event_type
+n_positive
+positive_fraction
+max_abs_point_biserial_r
+best_point_biserial_r
+best_precursor_feature
+classifier_auc
+classifier_balanced_accuracy
+n_fit_positive
+n_eval_positive
+```
+
 ## Forecasting sweeps
 
 `run_horizon_sweep.sh` runs the four configured horizons and all three objectives (`mse`, `ep`, and `mep`).
@@ -315,6 +396,46 @@ To run only selected horizons:
 HORIZONS='96 192' ./scripts/run_horizon_sweep.sh ...
 ```
 
+
+## Event-definition sensitivity analysis
+
+The primary paper results use a prominence fraction of `0.10` and an event-matching tolerance of `±3` steps. The sensitivity analysis recomputes the event metrics from the saved forecasts without retraining any forecasting models.
+
+It evaluates the same paper configurations over:
+
+```text
+prominence fraction: 0.05, 0.10, 0.20
+matching tolerance:  ±1, ±3, ±5 steps
+```
+
+Run the analysis after the forecasting sweeps have completed:
+
+```bash
+./scripts/run_event_sensitivity.sh \
+  results \
+  results/event_sensitivity.csv
+```
+
+The script evaluates the 216 forecasting configurations used by the paper. With nine event-definition combinations per configuration, the output contains 1,944 rows.
+
+For each configuration and event definition, the output reports both the mean/median window-level Event F1 and event counts aggregated across all test windows:
+
+```text
+window_event_macro_f1_mean
+window_event_macro_f1_median
+global_peak_f1
+global_trough_f1
+global_event_macro_f1
+peak_tp
+peak_fp
+peak_fn
+trough_tp
+trough_fp
+trough_fn
+```
+
+This analysis is intended to test whether the qualitative excursion-forecasting conclusions depend on the exact prominence threshold or temporal matching tolerance.
+
 ## Output files
 
 Each run writes:
@@ -340,3 +461,5 @@ metrics_focus_signal.csv
 ```
 
 `window_metrics.csv` contains metrics for individual non-overlapping test windows. `metrics.csv` aggregates those window-level values and stores the mean, median, population standard deviation, and number of valid observations for each metric.
+
+The event-specific precursor commands write the requested `*_event_precursors_*.csv` files directly under `results/`. The event-definition sensitivity command writes `results/event_sensitivity.csv`.

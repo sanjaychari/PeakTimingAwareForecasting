@@ -84,6 +84,9 @@ def _event_metrics(y: np.ndarray, y_hat: np.ndarray, config: EventConfig, sign: 
         timing = float("nan")
         magnitude = float("nan")
     return {
+        "tp": float(tp),
+        "fp": float(fp),
+        "fn": float(fn),
         "precision": precision,
         "recall": recall,
         "f1": f1,
