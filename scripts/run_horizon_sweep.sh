@@ -14,9 +14,17 @@ MODE=${4:-univariate}
 SIGNALS_CSV=${5:-}
 
 HORIZONS=${HORIZONS:-"96 192 336 720"}
+SEEDS=${SEEDS:-"1"}
+LOSSES=${LOSSES:-"mse ep mep"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-}
+SKIP_EXISTING=${SKIP_EXISTING:-1}
 
 if [[ "$MODE" == "univariate" ]]; then
-  MODELS=(dlinear patchtst itransformer timemixer)
+  if [[ -n "${MODELS:-}" ]]; then
+    read -r -a MODELS_ARRAY <<< "$MODELS"
+  else
+    MODELS_ARRAY=(dlinear patchtst itransformer timemixer)
+  fi
 
 elif [[ "$MODE" == "multivariate" ]]; then
   if [[ -z "$SIGNALS_CSV" ]]; then
@@ -25,7 +33,11 @@ elif [[ "$MODE" == "multivariate" ]]; then
   fi
 
   IFS=',' read -r -a SIGNALS <<< "$SIGNALS_CSV"
-  MODELS=(tsmixer itransformer timemixer)
+  if [[ -n "${MODELS:-}" ]]; then
+    read -r -a MODELS_ARRAY <<< "$MODELS"
+  else
+    MODELS_ARRAY=(tsmixer itransformer timemixer)
+  fi
 
 else
   echo "MODE must be univariate or multivariate" >&2
@@ -33,10 +45,26 @@ else
 fi
 
 for h in $HORIZONS; do
-  for model in "${MODELS[@]}"; do
-    for loss in mse ep mep; do
+  for model in "${MODELS_ARRAY[@]}"; do
+    for loss in $LOSSES; do
+      for seed in $SEEDS; do
 
-      echo "=== horizon=$h model=$model loss=$loss mode=$MODE ==="
+      echo "=== horizon=$h model=$model loss=$loss mode=$MODE seed=$seed ==="
+
+      SAFE_SERIES=${SERIES_ID//\//_}
+      SAFE_SERIES=${SAFE_SERIES//:/_}
+      RUN_SUFFIX=""
+      if [[ "$MODE" == "multivariate" ]]; then
+        RUN_SUFFIX="__mv"
+      fi
+      RUN_DIR=""
+      if [[ -n "$OUTPUT_ROOT" ]]; then
+        RUN_DIR="$OUTPUT_ROOT/${SAFE_SERIES}__${model}__${loss}__h${h}__seed${seed}${RUN_SUFFIX}"
+        if [[ "$SKIP_EXISTING" == "1" && -f "$RUN_DIR/config.json" && -f "$RUN_DIR/forecast.csv" ]]; then
+          echo "=== skip existing $RUN_DIR ==="
+          continue
+        fi
+      fi
 
       CMD=(
         ptaf run
@@ -55,15 +83,19 @@ for h in $HORIZONS; do
         --ep-under-weight-grid 1.0 2.0
         --ep-over-weight-grid 1.0 2.0
         --tuning-metric event_macro_f1
-        --seed 1
+        --seed "$seed"
       )
 
       if [[ "$MODE" == "multivariate" ]]; then
         CMD+=(--multivariate-signals "${SIGNALS[@]}")
       fi
+      if [[ -n "$RUN_DIR" ]]; then
+        CMD+=(--output-dir "$RUN_DIR")
+      fi
 
       "${CMD[@]}"
 
+      done
     done
   done
 done

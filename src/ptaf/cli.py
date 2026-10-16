@@ -17,6 +17,8 @@ from .experiment import ExperimentConfig, run_experiment
 from .correlation import write_correlation_analysis
 from .precursors import write_event_precursor_analysis
 from .robustness import write_results_sensitivity
+from .baselines import write_trivial_baselines
+from .breadth import build_trace_manifest
 from .models import SUPPORTED_MODELS
 from .paths import data_root
 
@@ -101,6 +103,41 @@ def _build_parser() -> argparse.ArgumentParser:
     sensitivity.add_argument("--event-tolerances", nargs="+", type=int, default=[1,3,5])
     sensitivity.add_argument("--output", type=Path, required=True)
     sensitivity.set_defaults(handler=_cmd_event_sensitivity)
+
+    baselines = sub.add_parser(
+        "trivial-baselines",
+        help="evaluate persistence, recent-window replay, and event-rate random baselines",
+    )
+    baselines.add_argument("--data", type=Path, required=True)
+    baselines.add_argument("--series-id", required=True)
+    baselines.add_argument("--horizons", nargs="+", type=int, default=[96,192,336,720])
+    baselines.add_argument("--input-size", type=int, default=336)
+    baselines.add_argument("--train-fraction", type=float, default=.7)
+    baselines.add_argument("--val-fraction", type=float, default=.1)
+    baselines.add_argument("--prominence-fraction", type=float, default=.10)
+    baselines.add_argument("--prominence-window", type=int, default=31)
+    baselines.add_argument("--event-distance", type=int, default=3)
+    baselines.add_argument("--event-tolerance", type=int, default=3)
+    baselines.add_argument("--random-trials", type=int, default=1000)
+    baselines.add_argument("--random-seed", type=int, default=1)
+    baselines.add_argument("--output", type=Path, required=True)
+    baselines.set_defaults(handler=_cmd_trivial_baselines)
+
+    manifest = sub.add_parser(
+        "trace-manifest",
+        help="select longest eligible traces for the breadth study without using event or forecast outcomes",
+    )
+    manifest.add_argument("--data", type=Path, required=True)
+    manifest.add_argument("--target-signal", required=True)
+    manifest.add_argument("--n-traces", type=int, default=3)
+    manifest.add_argument("--mode", choices=["univariate","multivariate"], default="univariate")
+    manifest.add_argument("--signals", nargs="+", default=None)
+    manifest.add_argument("--input-size", type=int, default=336)
+    manifest.add_argument("--max-horizon", type=int, default=720)
+    manifest.add_argument("--train-fraction", type=float, default=.7)
+    manifest.add_argument("--val-fraction", type=float, default=.1)
+    manifest.add_argument("--output", type=Path, required=True)
+    manifest.set_defaults(handler=_cmd_trace_manifest)
 
     run = sub.add_parser("run")
     run.add_argument("--data", type=Path, required=True)
@@ -195,6 +232,46 @@ def _cmd_event_precursors(args):
         prominence_window=args.prominence_window,
         event_distance=args.event_distance,
         event_tolerance=args.event_tolerance,
+    )
+    print(out)
+    return 0
+
+
+def _cmd_trivial_baselines(args):
+    frame = load_prepared(args.data)
+    out = write_trivial_baselines(
+        frame,
+        args.series_id,
+        tuple(args.horizons),
+        args.output,
+        input_size=args.input_size,
+        train_fraction=args.train_fraction,
+        val_fraction=args.val_fraction,
+        prominence_fraction=args.prominence_fraction,
+        prominence_window=args.prominence_window,
+        event_distance=args.event_distance,
+        event_tolerance=args.event_tolerance,
+        random_trials=args.random_trials,
+        random_seed=args.random_seed,
+    )
+    print(out)
+    return 0
+
+
+def _cmd_trace_manifest(args):
+    frame = load_prepared(args.data)
+    out = build_trace_manifest(
+        frame,
+        args.data,
+        args.target_signal,
+        args.output,
+        n_traces=args.n_traces,
+        mode=args.mode,
+        required_signals=tuple(args.signals or ()),
+        input_size=args.input_size,
+        max_horizon=args.max_horizon,
+        train_fraction=args.train_fraction,
+        val_fraction=args.val_fraction,
     )
     print(out)
     return 0
